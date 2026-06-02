@@ -1,12 +1,17 @@
 import cv2
 import mediapipe as mp
 from ultralytics import YOLO
+import serial
+import time
 
 # =========================
 # General Settings
 # =========================
 
-USE_ARDUINO = False  # Later we will change this to True
+USE_ARDUINO = True
+ARDUINO_PORT = "/dev/cu.usbserial-A5069RR4"
+BAUD_RATE = 9600
+
 STABLE_FRAMES_REQUIRED = 8
 
 COMMAND_MAP = {
@@ -16,6 +21,17 @@ COMMAND_MAP = {
     "RIGHT": "R",
     "STOP": "S"
 }
+
+arduino = None
+
+if USE_ARDUINO:
+    try:
+        arduino = serial.Serial(ARDUINO_PORT, BAUD_RATE, timeout=1)
+        time.sleep(2)
+        print("Connected to Arduino")
+    except Exception as e:
+        print(f"Could not connect to Arduino: {e}")
+        arduino = None
 
 # =========================
 # MediaPipe Setup
@@ -117,7 +133,6 @@ def process_gesture_mode(frame):
                 hand_landmarks,
                 mp_hands.HAND_CONNECTIONS
             )
-
             command = detect_gesture(hand_landmarks)
 
     return frame, command
@@ -179,7 +194,6 @@ def process_tracking_mode(frame):
             2
         )
 
-    # Center lines
     cv2.line(frame, (frame_center_x, 0), (frame_center_x, height), (255, 0, 0), 2)
     cv2.line(frame, (frame_center_x - CENTER_TOLERANCE, 0), (frame_center_x - CENTER_TOLERANCE, height), (255, 255, 0), 1)
     cv2.line(frame, (frame_center_x + CENTER_TOLERANCE, 0), (frame_center_x + CENTER_TOLERANCE, height), (255, 255, 0), 1)
@@ -193,9 +207,9 @@ def send_command(command):
     if short_command is None:
         return
 
-    if USE_ARDUINO:
-        # Later we will put Arduino serial code here
-        print(f"Arduino command: {command} -> {short_command}")
+    if USE_ARDUINO and arduino is not None:
+        arduino.write(short_command.encode())
+        print(f"Sent to Arduino: {command} -> {short_command}")
     else:
         print(f"Simulation command: {command} -> {short_command}")
 
@@ -261,6 +275,17 @@ def draw_interface(frame, command):
         2
     )
 
+    status = "Arduino Connected" if arduino is not None else "Arduino Not Connected"
+    cv2.putText(
+        frame,
+        status,
+        (30, 190),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 0) if arduino is not None else (0, 0, 255),
+        2
+    )
+
     cv2.putText(
         frame,
         "Press G = Gesture | T = Tracking | Q = Quit",
@@ -294,10 +319,8 @@ while True:
 
     if current_mode == "GESTURE":
         frame, command = process_gesture_mode(frame)
-
     elif current_mode == "TRACKING":
         frame, command = process_tracking_mode(frame)
-
     else:
         command = "STOP"
 
@@ -309,19 +332,27 @@ while True:
     key = cv2.waitKey(1) & 0xFF
 
     if key == ord("q"):
+        send_command("STOP")
         break
 
     elif key == ord("g"):
         current_mode = "GESTURE"
         reset_stability()
+        send_command("STOP")
         print("Switched to Gesture Mode")
 
     elif key == ord("t"):
         current_mode = "TRACKING"
         reset_stability()
+        send_command("STOP")
         print("Switched to Tracking Mode")
 
 
 cap.release()
 hands.close()
+
+if arduino is not None:
+    send_command("STOP")
+    arduino.close()
+
 cv2.destroyAllWindows()
